@@ -12,8 +12,17 @@ load_dotenv()
 
 sys.path.append(str(Path(__file__).parent))
 from retriever import retrieve_relevant_chunks, build_context, ask_groq, get_clients
+from router import GROQ_MODEL
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+# Which user's data to evaluate against. The eval questions/references
+# below were written assuming a specific test user's game history
+# (e.g. "Vienna Game, 76% win rate, 17 games" is THAT user's real stats,
+# not a universal truth) — so this MUST match whichever username you
+# actually ran /setup for. Change this before running eval against a
+# different user's collection.
+EVAL_USERNAME = os.getenv("CHESSCOM_USERNAME", "dasharatha19")
 
 TEST_QUESTIONS = [
     {
@@ -56,7 +65,7 @@ Respond ONLY with valid JSON like this exact format:
 {{"faithfulness": 0.8, "answer_relevancy": 0.9, "context_precision": 0.7, "reason": "one sentence"}}"""
 
     response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model=GROQ_MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
         max_tokens=200
@@ -103,16 +112,16 @@ def run_evaluation():
         # build real context the same way ask() does
         parts = []
         if route in ["aggregate", "hybrid"]:
-            parts.append(get_aggregate_stats())
+            parts.append(get_aggregate_stats(EVAL_USERNAME))
         if route in ["specific", "hybrid"]:
-            chunks = retrieve_relevant_chunks(question, qdrant, embed_model, limit=4)
+            chunks = retrieve_relevant_chunks(question, EVAL_USERNAME, qdrant, embed_model, limit=4)
             parts.append(build_context(chunks))
 
         real_context = "\n\n".join(parts)
 
         # ✅ FIX 1: Generate the answer first before scoring
         try:
-            answer = ask_groq(question, real_context, groq_client_inner)
+            answer = ask_groq(question, real_context, groq_client_inner, EVAL_USERNAME)
         except Exception as e:
             answer = "error generating answer"
         print(f"Answer: {answer[:120]}...")

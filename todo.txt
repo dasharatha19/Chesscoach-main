@@ -1,0 +1,44 @@
+# ChessCoach AI — Known Issues / Deferred Work
+
+Format: one entry per known gap. Don't delete finished items — move them
+to a "Done" section at the bottom so there's a record of what was fixed
+and when, same as a changelog.
+
+---
+
+## OPEN
+
+### 1. `parse_pgn.py` — `played_as` silently defaults to "black" if username matches neither player
+- **Where:** `extract_game_data()`, the line:
+  `played_as = "white" if white == user_lc else "black"`
+- **Problem:** if the username passed in doesn't match White OR Black in
+  that game, the code doesn't error — it just assumes "black" and builds
+  a fully-formed but FAKE row (wrong result, wrong opponent, wrong rating).
+- **Why it's safe to leave for now:** the only current caller
+  (`fetch_games.py` → Chess.com API) can only ever return games the
+  username actually played. The bug is real but currently unreachable.
+- **Why it MUST be fixed before shipping:** the planned "upload your own
+  PGN" feature (see doubts.txt, item 2.1) will call this SAME function
+  with untrusted, user-supplied files where the username might not
+  actually appear in the game at all.
+- **The fix, already agreed on:** add an explicit check — if
+  `user_lc` doesn't match White or Black, raise a validation-style
+  error/skip instead of guessing. Reuse the same
+  `GameValidationError` pattern already added for header validation.
+  For the upload path specifically, this check should be MANDATORY
+  (stricter than the API path, which can keep trusting Chess.com's
+  guarantee).
+- **Trigger to come back to this:** the moment work starts on the
+  PGN-upload feature (2.1) — do this fix FIRST, before wiring up the
+  upload endpoint to the existing parser.
+
+---
+
+## DONE
+
+### ✅ `parse_pgn.py` — added header validation (RawGameHeaders / GameValidationError)
+Raw Chess.com headers are now validated (White/Black not blank, Result
+is a known value, Elo fields are numeric) BEFORE conversion into our
+internal schema. Bad games are skipped individually with a specific
+logged reason instead of silently defaulting. A >20% batch failure
+rate triggers a "this looks like a Chess.com schema change" warning.

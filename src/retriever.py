@@ -10,6 +10,10 @@ import pandas as pd
 
 load_dotenv()
 
+import sys
+sys.path.append(str(Path(__file__).parent))
+from router import GROQ_MODEL  # single source of truth for which Groq model to use
+
 ROUTE_AGGREGATE = "aggregate"
 ROUTE_SPECIFIC  = "specific"
 ROUTE_HYBRID    = "hybrid"
@@ -129,7 +133,9 @@ Your job:
 - NEVER mention a specific game, move, or opening that is not explicitly written in the context below. If it is not there, do not say it.
 - When OVERALL STATISTICS are provided, use ONLY those for win rates and opening names. NEVER mix opening names from SPECIFIC RELEVANT GAMES into statistical claims.
 - Be direct and actionable — tell them exactly what to work on
-- Keep your answer concise (150-200 words max)
+- Keep your ENTIRE answer under 180 words. This is a hard limit, not a suggestion.
+- Structure your answer as at most 2 short paragraphs (or one short paragraph + a brief list).
+- ALWAYS finish with a complete sentence. Never stop mid-word or mid-thought — if you're running long, wrap up early rather than being cut off.
 
 Remember: You are analyzing REAL games from their history, not hypothetical scenarios."""
 
@@ -142,13 +148,16 @@ My question: {question}
 IMPORTANT: Only reference openings and games explicitly shown above. Do not invent or extrapolate."""
 
     response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model=GROQ_MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": user_message}
         ],
         temperature=0.1,
-        max_tokens=500
+        max_tokens=650   # safety margin above the ~180-word target above —
+                          # NOT the fix itself. The prompt instruction is the
+                          # real fix; this just prevents a mid-sentence cutoff
+                          # if the model slightly overruns anyway.
     )
 
     return response.choices[0].message.content

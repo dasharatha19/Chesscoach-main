@@ -8,7 +8,14 @@
 # Instead of always doing vector search, we first ask:
 # "what KIND of question is this?" then pick the right tool.
 
+import os
 from groq import Groq
+
+# Groq periodically deprecates/decommissions models (it happened to this
+# exact project — llama-3.3-70b-versatile was decommissioned 2026-08-16).
+# Reading this from an env var means the NEXT deprecation is a one-line
+# .env change instead of hunting through every file that calls Groq.
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 import os
 from dotenv import load_dotenv
 
@@ -45,7 +52,7 @@ Categories:
 Reply with ONLY one word: aggregate, specific, or hybrid"""
 
     response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model=GROQ_MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
         max_tokens=10      # we only need one word
@@ -80,7 +87,7 @@ Question: {question}
 Reply with ONLY the rewritten search query, nothing else."""
 
     response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model=GROQ_MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
         max_tokens=30
