@@ -10,9 +10,11 @@
 # This way when you ask "why do I blunder in endgames?" the retriever
 # finds ENDGAME chunks specifically — not the whole game.
 
-import pandas as pd
 import os
+import sys
 from pathlib import Path
+
+import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -128,7 +130,7 @@ if __name__ == "__main__":
 
     if not csv_path.exists():
         print(f"ERROR: {csv_path} not found. Run parse_pgn.py first.")
-        exit(1)
+        sys.exit(1)
 
     chunks = chunk_all_games(csv_path)
 

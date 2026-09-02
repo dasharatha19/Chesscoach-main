@@ -9,6 +9,7 @@
 # "what KIND of question is this?" then pick the right tool.
 
 import os
+
 from groq import Groq
 
 # Groq periodically deprecates/decommissions models (it happened to this
@@ -17,6 +18,7 @@ from groq import Groq
 # .env change instead of hunting through every file that calls Groq.
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()

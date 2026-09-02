@@ -2,16 +2,17 @@
 # Custom RAG evaluation — no ragas dependency needed
 # Measures the same things: faithfulness, relevancy, context quality
 
+import json
+import os
 import sys
 from pathlib import Path
+
 from dotenv import load_dotenv
-import os
-import json
 
 load_dotenv()
 
 sys.path.append(str(Path(__file__).parent))
-from retriever import retrieve_relevant_chunks, build_context, ask_groq, get_clients
+from retriever import ask_groq, build_context, get_clients, retrieve_relevant_chunks
 from router import GROQ_MODEL
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -78,7 +79,7 @@ Respond ONLY with valid JSON like this exact format:
         start = raw.find("{")
         end   = raw.rfind("}") + 1
         return json.loads(raw[start:end])
-    except Exception:
+    except Exception: # noqa: BLE001 — LLM JSON output is unpredictable; fall back to neutral scores rather than crash the eval run
         return {"faithfulness": 0.5, "answer_relevancy": 0.5, "context_precision": 0.5, "reason": "parse error"}
 
 
@@ -98,12 +99,9 @@ def run_evaluation():
         print(f"\nQ{i+1}: {question}")
 
         # get route and real context separately
+
+        from retriever import get_aggregate_stats
         from router import classify_question
-        from groq import Groq as GroqClient
-        from retriever import (
-            get_clients, retrieve_relevant_chunks,
-            build_context, get_aggregate_stats, ask
-        )
 
         qdrant, embed_model, groq_client_inner = get_clients()
         route = classify_question(question, groq_client)
@@ -122,7 +120,7 @@ def run_evaluation():
         # ✅ FIX 1: Generate the answer first before scoring
         try:
             answer = ask_groq(question, real_context, groq_client_inner, EVAL_USERNAME)
-        except Exception as e:
+        except Exception: # noqa: BLE001 — one bad question must not abort the rest of the eval run
             answer = "error generating answer"
         print(f"Answer: {answer[:120]}...")
 
@@ -131,7 +129,7 @@ def run_evaluation():
             scores = score_answer_with_llm(
                 question, answer, real_context, reference, groq_client
             )
-        except Exception as e:
+        except Exception as e:   # noqa: BLE001 — scorer call can fail in many ways; log and continue rather than abort the eval run
             print(f"Scorer error: {e}")
             scores = {
                 "faithfulness": 0.5,

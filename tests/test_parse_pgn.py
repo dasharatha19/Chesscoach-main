@@ -9,18 +9,18 @@
 
 import sys
 from pathlib import Path
-import pytest
+
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from parse_pgn import (
-    RawGameHeaders,
     GameValidationError,
-    validate_game_headers,
+    RawGameHeaders,
     parse_pgn_file,
+    validate_game_headers,
 )
-
 
 # ── Fixtures: fake PGN header dicts, no real files needed ──────────
 

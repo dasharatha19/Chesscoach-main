@@ -10,13 +10,15 @@
 #
 # This turns raw chess notation into data we can actually analyze.
 
-import chess.pgn          # reads PGN format game by game
-import pandas as pd       # for organizing data into a table
+import io  # for reading strings as files
 import os
+import sys
 from pathlib import Path
+
+import chess.pgn  # reads PGN format game by game
+import pandas as pd  # for organizing data into a table
 from dotenv import load_dotenv
-import io                 # for reading strings as files
-from pydantic import BaseModel, field_validator, ValidationError
+from pydantic import BaseModel, ValidationError, field_validator
 
 load_dotenv()
 
@@ -256,7 +258,7 @@ def parse_pgn_file(pgn_path: Path, username: str) -> pd.DataFrame:
             skipped_reasons.append(e.reason)
             continue
 
-        except Exception as e:
+        except Exception as e: # noqa: BLE001 — intentional: skip one malformed game, keep processing the batch
             # Anything else unexpected (e.g. python-chess itself
             # choked on malformed PGN) — same "skip one, keep going"
             # policy, but flagged differently so it's not confused
@@ -303,7 +305,7 @@ def show_quick_stats(df: pd.DataFrame):
     print(f"\nAvg accuracy: {df['my_accuracy'].mean():.1f}%")
     print(f"Avg moves/game: {df['total_moves'].mean():.1f}")
 
-    print(f"\nTop 5 openings you play:")
+    print("\nTop 5 openings you play:")
     top_openings = df["opening"].value_counts().head(5)
     for opening, count in top_openings.items():
         subset  = df[df["opening"] == opening]
@@ -317,7 +319,7 @@ if __name__ == "__main__":
 
     if not pgn_path.exists():
         print(f"ERROR: {pgn_path} not found. Run fetch_games.py first.")
-        exit(1)
+        sys.exit(1)
 
     df = parse_pgn_file(pgn_path, USERNAME)
 

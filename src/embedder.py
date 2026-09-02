@@ -1,14 +1,15 @@
 # src/embedder.py
 
-from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
-from fastembed import TextEmbedding
 import os
+import sys
 import uuid
 from pathlib import Path
-from dotenv import load_dotenv
 
-import sys
+from dotenv import load_dotenv
+from fastembed import TextEmbedding
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, PointStruct, VectorParams
+
 sys.path.append(str(Path(__file__).parent))
 from chunker import chunk_all_games
 
@@ -116,7 +117,7 @@ def setup_user(username: str) -> dict:
     print(f"Downloaded {total_games} games")
 
     # Step 2: Parse PGN → CSV
-    print(f"\n[2/4] Parsing games...")
+    print("\n[2/4] Parsing games...")
     df       = parse_pgn_file(pgn_path, username)
     csv_path = PROCESSED / f"{username}_games.csv"
     PROCESSED.mkdir(parents=True, exist_ok=True)
@@ -124,11 +125,11 @@ def setup_user(username: str) -> dict:
     print(f"Parsed {len(df)} games")
 
     # Step 3: Chunk
-    print(f"\n[3/4] Chunking games...")
+    print("\n[3/4] Chunking games...")
     chunks = chunk_all_games(csv_path)
 
     # Step 4: Embed + store
-    print(f"\n[4/4] Embedding and storing in Qdrant...")
+    print("\n[4/4] Embedding and storing in Qdrant...")
     client = get_qdrant_client()
     model  = get_embedding_model()
     create_collection(client, username)

@@ -1,9 +1,11 @@
 # src/fetch_games.py
 
-import requests
 import os
+import sys
 import time
 from pathlib import Path
+
+import requests
 
 RAW_PGN_DIR = Path("data/raw_pgn")
 RAW_PGN_DIR.mkdir(parents=True, exist_ok=True)
@@ -78,7 +80,7 @@ if __name__ == "__main__":
 
     if not username:
         print("ERROR: CHESSCOM_USERNAME not set in .env")
-        exit(1)
+        sys.exit(1)
 
     pgn_text = fetch_all_games(username, last_n_months=6)
 

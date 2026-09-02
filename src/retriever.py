@@ -1,16 +1,18 @@
 # src/retriever.py
 
-from qdrant_client import QdrantClient
-from fastembed import TextEmbedding
-from groq import Groq
 import os
 from pathlib import Path
-from dotenv import load_dotenv
+
 import pandas as pd
+from dotenv import load_dotenv
+from fastembed import TextEmbedding
+from groq import Groq
+from qdrant_client import QdrantClient
 
 load_dotenv()
 
 import sys
+
 sys.path.append(str(Path(__file__).parent))
 from router import GROQ_MODEL  # single source of truth for which Groq model to use
 
@@ -96,7 +98,7 @@ def retrieve_relevant_chunks(
     embed_model: TextEmbedding,
     limit: int = 8
 ) -> list[dict]:
-    query_vector = list(embed_model.embed([question]))[0]
+    query_vector = next(iter(embed_model.embed([question])))
     collection   = get_collection_name(username)
 
     results = qdrant.query_points(

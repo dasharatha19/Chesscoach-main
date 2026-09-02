@@ -1,14 +1,15 @@
 # app.py
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import sys
 from pathlib import Path
 
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
 sys.path.append(str(Path(__file__).parent / "src"))
-from retriever import ask
 from embedder import collection_exists, get_qdrant_client, setup_user
+from retriever import ask
 
 app = FastAPI(title="ChessCoach AI", version="2.0.1")
 
@@ -105,7 +106,7 @@ async def setup_username(username: str):
         try:
             result = setup_user(username)
             setup_results[username] = {"status": "ready", **result}
-        except Exception as e:
+        except Exception as e: # # noqa: BLE001 — background thread; must catch anything so setup_results reports the failure instead of the thread dying silently  
             setup_results[username] = {"status": "error", "detail": str(e)}
         finally:
             setup_in_progress.discard(username)
