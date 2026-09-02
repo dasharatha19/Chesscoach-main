@@ -1,6 +1,6 @@
 # app.py
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import sys
@@ -91,7 +91,7 @@ def check_user(username: str):
 setup_results: dict = {}
 
 @app.post("/setup/{username}")
-async def setup_username(username: str, background_tasks: BackgroundTasks):
+async def setup_username(username: str):
     username = username.lower().strip()
     if not username:
         raise HTTPException(status_code=400, detail="Username cannot be empty")
@@ -122,34 +122,6 @@ def setup_status(username: str):
     if username in setup_results:
         return setup_results[username]
     return {"status": "not_started"}
-    """
-    Fetches, parses, chunks, and embeds games for a new user.
-    This takes ~30-60 seconds depending on game count.
-    """
-    username = username.lower().strip()
-
-    if not username:
-        raise HTTPException(status_code=400, detail="Username cannot be empty")
-
-    if username in setup_in_progress:
-        raise HTTPException(status_code=409, detail="Setup already in progress for this user")
-
-    setup_in_progress.add(username)
-
-    try:
-        result = setup_user(username)
-        return SetupResponse(
-            username=result["username"],
-            total_games=result["total_games"],
-            total_chunks=result["total_chunks"],
-            status="ready"
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Setup failed: {str(e)}")
-    finally:
-        setup_in_progress.discard(username)
 
 
 @app.post("/ask", response_model=AnswerResponse)
