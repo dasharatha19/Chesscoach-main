@@ -107,7 +107,13 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 # Install project dependencies
 uv sync
 ```
+             
 
+
+
+
+
+             
 ### 3. Set up environment variables
 
 ```bash
