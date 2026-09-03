@@ -1,6 +1,7 @@
 # src/retriever.py
 
 import os
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -10,8 +11,6 @@ from groq import Groq
 from qdrant_client import QdrantClient
 
 load_dotenv()
-
-import sys
 
 sys.path.append(str(Path(__file__).parent))
 from router import GROQ_MODEL  # single source of truth for which Groq model to use
@@ -29,14 +28,27 @@ def get_collection_name(username: str) -> str:
     return f"chess_{username.lower()}"
 
 
+# Module-level cache — the embedding model (and other clients) get
+# created ONCE, the first time get_clients() runs, then reused for
+# every subsequent call. Before this, get_clients() was called fresh
+# inside every single ask() request, which meant re-loading the whole
+# ONNX embedding model into memory on every question — a real
+# contributor to memory pressure on a small container (like Render's
+# free tier), not just wasted time.
+_cached_clients = None
+
+
 def get_clients():
-    qdrant = QdrantClient(
-        url=os.getenv("QDRANT_URL"),
-        api_key=os.getenv("QDRANT_API_KEY")
-    )
-    embed = TextEmbedding(EMBEDDING_MODEL)
-    groq  = Groq(api_key=GROQ_API_KEY)
-    return qdrant, embed, groq
+    global _cached_clients
+    if _cached_clients is None:
+        qdrant = QdrantClient(
+            url=os.getenv("QDRANT_URL"),
+            api_key=os.getenv("QDRANT_API_KEY")
+        )
+        embed = TextEmbedding(EMBEDDING_MODEL)
+        groq  = Groq(api_key=GROQ_API_KEY)
+        _cached_clients = (qdrant, embed, groq)
+    return _cached_clients
 
 
 def get_aggregate_stats(username: str) -> str:
