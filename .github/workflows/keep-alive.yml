@@ -1,0 +1,19 @@
+name: Keep Render Backend Awake
+
+# Render's free tier spins down after 15 minutes of inactivity.
+# Render's free tier gives 750 hours/month — enough for 24/7 uptime
+# of one service — so pinging it to stay warm fits within the free
+# allowance, it's not "cheating" the free tier.
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # every 10 minutes, safely under the 15-min sleep threshold
+  workflow_dispatch:          # lets you trigger it manually too, for testing
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping backend health endpoint
+        run: curl -f https://chesscoach-main.onrender.com/ || exit 0
+        # `|| exit 0` — a single failed ping (e.g. Render mid-deploy)
+        # shouldn't mark this whole workflow as failed/alert you.
