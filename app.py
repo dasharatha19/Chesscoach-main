@@ -1,17 +1,24 @@
 # app.py
 
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import os
 import sys
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-
 sys.path.append(str(Path(__file__).parent / "src"))
-from embedder import collection_exists, get_qdrant_client, setup_user
 from retriever import ask
+from embedder import collection_exists, get_qdrant_client, setup_user
 
-app = FastAPI(title="ChessCoach AI", version="2.0.1")
+# Single source of truth for the version number — read from
+# pyproject.toml at startup instead of hardcoding the same number in
+# multiple places (which had drifted to 3 different values before this).
+import tomllib
+with open(Path(__file__).parent / "pyproject.toml", "rb") as f:
+    APP_VERSION = tomllib.load(f)["project"]["version"]
+
+app = FastAPI(title="ChessCoach AI", version=APP_VERSION)
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -60,8 +67,91 @@ class SetupResponse(BaseModel):
 
 
 @app.get("/")
+@app.head("/")  # UptimeRobot (and most uptime monitors) ping with HEAD,
+                 # not GET, to save bandwidth — without this, every ping
+                 # got a 405 even though the app was genuinely healthy.
 def health_check():
-    return {"status": "ChessCoach AI is running", "version": "2.0.0"}
+    return {"status": "ChessCoach AI is running", "version": APP_VERSION}
+
+
+@app.get("/health")
+@app.head("/health")
+def health():
+    """
+    LIVENESS check — "is the process itself alive and responding?"
+    Deliberately does ZERO real work: no DB calls, no external calls.
+    If this ever gets slow, something is badly wrong with the process
+    itself, not with a dependency — that distinction is the whole
+    point of keeping this separate from /ready below.
+    Kept as a separate route from "/" (which stays, for backward
+    compatibility with anything already pointed at it) since "/health"
+    is the more conventional/expected name for monitoring tools.
+    """
+    return {"status": "alive"}
+
+
+@app.get("/ready")
+def ready():
+    """
+    READINESS check — "is the app not just alive, but actually able
+    to serve real traffic right now?" Checks the things /ask and
+    /setup actually depend on. Returns 503 (not 200) if anything
+    required is missing/unreachable, so monitoring tools and load
+    balancers can correctly tell "up but broken" apart from "up and
+    working" — a plain 200 from "/" can't make that distinction.
+    """
+    checks = {}
+    all_ok = True
+
+    # Required env vars actually present? (root cause of the earlier
+    # "Connection refused" Qdrant bug was exactly this, silently)
+    for var in ("QDRANT_URL", "QDRANT_API_KEY", "GROQ_API_KEY"):
+        present = bool(os.getenv(var))
+        checks[f"env:{var}"] = "ok" if present else "MISSING"
+        if not present:
+            all_ok = False
+
+    # Can we actually reach Qdrant right now, not just "is the URL set"?
+    try:
+        client = get_qdrant_client()
+        client.get_collections()
+        checks["qdrant_connection"] = "ok"
+    except Exception as e:
+        checks["qdrant_connection"] = f"FAILED: {e}"
+        all_ok = False
+
+    status_code = 200 if all_ok else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={"ready": all_ok, "checks": checks}
+    )
+
+
+@app.get("/health/db")
+def health_db():
+    """
+    Dependency-specific check — narrows down "which piece is actually
+    broken" faster than reading a full traceback. Checks ONLY Qdrant,
+    directly, and reports latency so slow-but-technically-working
+    counts differently from fully down.
+    """
+    import time
+    start = time.monotonic()
+    try:
+        client = get_qdrant_client()
+        collections = client.get_collections()
+        latency_ms = round((time.monotonic() - start) * 1000, 1)
+        return {
+            "status": "ok",
+            "latency_ms": latency_ms,
+            "collection_count": len(collections.collections),
+        }
+    except Exception as e:
+        latency_ms = round((time.monotonic() - start) * 1000, 1)
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unreachable", "latency_ms": latency_ms, "error": str(e)}
+        )
 
 
 @app.get("/check/{username}")
@@ -92,7 +182,7 @@ def check_user(username: str):
 setup_results: dict = {}
 
 @app.post("/setup/{username}")
-async def setup_username(username: str):
+async def setup_username(username: str, background_tasks: BackgroundTasks):
     username = username.lower().strip()
     if not username:
         raise HTTPException(status_code=400, detail="Username cannot be empty")
@@ -106,7 +196,7 @@ async def setup_username(username: str):
         try:
             result = setup_user(username)
             setup_results[username] = {"status": "ready", **result}
-        except Exception as e: # # noqa: BLE001 — background thread; must catch anything so setup_results reports the failure instead of the thread dying silently  
+        except Exception as e:
             setup_results[username] = {"status": "error", "detail": str(e)}
         finally:
             setup_in_progress.discard(username)
@@ -123,6 +213,34 @@ def setup_status(username: str):
     if username in setup_results:
         return setup_results[username]
     return {"status": "not_started"}
+    """
+    Fetches, parses, chunks, and embeds games for a new user.
+    This takes ~30-60 seconds depending on game count.
+    """
+    username = username.lower().strip()
+
+    if not username:
+        raise HTTPException(status_code=400, detail="Username cannot be empty")
+
+    if username in setup_in_progress:
+        raise HTTPException(status_code=409, detail="Setup already in progress for this user")
+
+    setup_in_progress.add(username)
+
+    try:
+        result = setup_user(username)
+        return SetupResponse(
+            username=result["username"],
+            total_games=result["total_games"],
+            total_chunks=result["total_chunks"],
+            status="ready"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Setup failed: {str(e)}")
+    finally:
+        setup_in_progress.discard(username)
 
 
 @app.post("/ask", response_model=AnswerResponse)
