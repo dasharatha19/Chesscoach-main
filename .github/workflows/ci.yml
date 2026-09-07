@@ -3,11 +3,32 @@ name: CI
 # Runs on every push and every PR — this does NOT deploy anything.
 # Its only job is to block merging broken code. Deployment (CD) is a
 # separate, later step once this is trustworthy.
+#
+# paths-ignore: skip running entirely when the ONLY files that changed
+# match this list — no code changed, nothing for lint/tests to check,
+# so running the whole pipeline would just burn CI minutes for no
+# reason. If a commit touches BOTH a .md file AND a real code file,
+# the workflow still runs — this only skips when EVERY changed file
+# matches one of these patterns.
 on:
   push:
     branches: [main, staging]
+    paths-ignore:
+      - "**.md"
+      - "TODO.md"
+      - "ROADMAP.md"
+      - "CHANGELOG.md"
+      - "LICENSE"
+      - ".gitignore"
   pull_request:
     branches: [main, staging]
+    paths-ignore:
+      - "**.md"
+      - "TODO.md"
+      - "ROADMAP.md"
+      - "CHANGELOG.md"
+      - "LICENSE"
+      - ".gitignore"
 
 jobs:
   test-backend:
