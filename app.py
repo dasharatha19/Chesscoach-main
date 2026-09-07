@@ -2,7 +2,7 @@
 
 import os
 import sys
-import tomllib
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
@@ -14,11 +14,22 @@ sys.path.append(str(Path(__file__).parent / "src"))
 from embedder import collection_exists, get_qdrant_client, setup_user
 from retriever import ask
 
-# Single source of truth for the version number — read from
-# pyproject.toml at startup instead of hardcoding the same number in
-# multiple places (which had drifted to 3 different values before this).
-with open(Path(__file__).parent / "pyproject.toml", "rb") as f:
-    APP_VERSION = tomllib.load(f)["project"]["version"]
+# Single source of truth for the version number. Originally this read
+# pyproject.toml directly as a file at runtime — but that broke on
+# Render: the raw source file isn't guaranteed to sit next to app.py
+# inside the deployed container, even though it's right there locally.
+# importlib.metadata reads the version from the package's INSTALLED
+# metadata instead (created when `pip install -e .` / `uv sync` runs),
+# which exists regardless of whether the original .toml file is
+# physically present at runtime — the correct, deploy-environment-safe
+# way to do this.
+try:
+    APP_VERSION = version("chesscoach-ai")
+except PackageNotFoundError:
+    # Fallback so the app still starts even if something's unusual
+    # about how it was installed — never let a version lookup crash
+    # the whole app the way the old file-read approach just did.
+    APP_VERSION = "0.0.0-unknown"
 
 app = FastAPI(title="ChessCoach AI", version=APP_VERSION)
 
