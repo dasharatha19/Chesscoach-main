@@ -1,20 +1,22 @@
 # app.py
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import os
 import sys
+import tomllib
 from pathlib import Path
 
+from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
 sys.path.append(str(Path(__file__).parent / "src"))
-from retriever import ask
+
 from embedder import collection_exists, get_qdrant_client, setup_user
+from retriever import ask
 
 # Single source of truth for the version number — read from
 # pyproject.toml at startup instead of hardcoding the same number in
 # multiple places (which had drifted to 3 different values before this).
-import tomllib
 with open(Path(__file__).parent / "pyproject.toml", "rb") as f:
     APP_VERSION = tomllib.load(f)["project"]["version"]
 
@@ -116,7 +118,9 @@ def ready():
         client = get_qdrant_client()
         client.get_collections()
         checks["qdrant_connection"] = "ok"
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — intentionally broad: this
+        # health check's whole job is "catch ANY failure reaching Qdrant",
+        # not just one specific exception type.
         checks["qdrant_connection"] = f"FAILED: {e}"
         all_ok = False
 
@@ -146,7 +150,7 @@ def health_db():
             "latency_ms": latency_ms,
             "collection_count": len(collections.collections),
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — same reasoning as /ready above
         latency_ms = round((time.monotonic() - start) * 1000, 1)
         return JSONResponse(
             status_code=503,
@@ -196,7 +200,10 @@ async def setup_username(username: str, background_tasks: BackgroundTasks):
         try:
             result = setup_user(username)
             setup_results[username] = {"status": "ready", **result}
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — this runs in a background
+            # thread with no caller waiting synchronously; if this doesn't
+            # catch everything, the thread dies silently and /setup-status
+            # would poll forever with no way to ever report the failure.
             setup_results[username] = {"status": "error", "detail": str(e)}
         finally:
             setup_in_progress.discard(username)
@@ -237,8 +244,10 @@ def setup_status(username: str):
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Setup failed: {str(e)}")
+    except Exception as e:  # noqa: BLE001 — top-level API error boundary:
+        # anything unexpected here should become a proper 500 response,
+        # not an unhandled crash leaking a raw traceback to the caller.
+        raise HTTPException(status_code=500, detail=f"Setup failed: {e!s}")
     finally:
         setup_in_progress.discard(username)
 
