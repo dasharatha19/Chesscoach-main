@@ -72,13 +72,6 @@ class AnswerResponse(BaseModel):
     username: str
 
 
-class SetupResponse(BaseModel):
-    username:     str
-    total_games:  int
-    total_chunks: int
-    status:       str
-
-
 @app.get("/")
 @app.head("/")  # UptimeRobot (and most uptime monitors) ping with HEAD,
                  # not GET, to save bandwidth — without this, every ping
@@ -231,36 +224,6 @@ def setup_status(username: str):
     if username in setup_results:
         return setup_results[username]
     return {"status": "not_started"}
-    """
-    Fetches, parses, chunks, and embeds games for a new user.
-    This takes ~30-60 seconds depending on game count.
-    """
-    username = username.lower().strip()
-
-    if not username:
-        raise HTTPException(status_code=400, detail="Username cannot be empty")
-
-    if username in setup_in_progress:
-        raise HTTPException(status_code=409, detail="Setup already in progress for this user")
-
-    setup_in_progress.add(username)
-
-    try:
-        result = setup_user(username)
-        return SetupResponse(
-            username=result["username"],
-            total_games=result["total_games"],
-            total_chunks=result["total_chunks"],
-            status="ready"
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:  # noqa: BLE001 — top-level API error boundary:
-        # anything unexpected here should become a proper 500 response,
-        # not an unhandled crash leaking a raw traceback to the caller.
-        raise HTTPException(status_code=500, detail=f"Setup failed: {e!s}")
-    finally:
-        setup_in_progress.discard(username)
 
 
 @app.post("/ask", response_model=AnswerResponse)

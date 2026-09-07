@@ -36,6 +36,11 @@ by Added / Changed / Fixed / Removed.
   ping with HEAD by default).
 
 ### Fixed
+- `app.py` — removed ~30 lines of unreachable dead code sitting inside
+  `setup_status()` (leftover from an older synchronous setup flow,
+  left behind after refactoring to the current background-thread
+  pattern). Also removed the now-unused `SetupResponse` model it was
+  the only caller of.
 - App startup crashed on Render (`FileNotFoundError: pyproject.toml`)
   — the version lookup assumed the raw source file would be present
   at runtime, which isn't guaranteed inside a deployed container.

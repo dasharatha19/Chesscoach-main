@@ -90,10 +90,11 @@ before it being solid. Status is honest: ✅ done & verified, 🟡 started,
 - ⬜ `app.py` — unused `BackgroundTasks` import/param (dead code, uses
   raw `threading.Thread` instead) — harmless but confusing, worth a
   clean single-purpose commit.
-- ⬜ `app.py` — unreachable code block in `setup_username()` (a full
-  `SetupResponse`-returning block sitting after an earlier `return`
-  in the same function) — needs a decision: which version was the
-  actual intent?
+- ✅ `app.py` — unreachable code block in `setup_status()` (leftover
+  from an older synchronous setup flow, left behind after the
+  background-thread refactor) — removed, along with the now-unused
+  `SetupResponse` model. Confirmed via tests + direct endpoint check
+  that `/setup-status` behavior is unaffected.
 - ⬜ `router.py`'s `rewrite_query()` — observed returning an **empty
   string** on a real question during testing (`Query rewritten:
   '...' → ''`). Pipeline didn't crash (fell through to unrewritten
