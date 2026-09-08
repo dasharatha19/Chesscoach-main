@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pandas as pd
 from dotenv import load_dotenv
-from fastembed import TextEmbedding
 from groq import Groq
 from qdrant_client import QdrantClient
 
 load_dotenv()
 
 sys.path.append(str(Path(__file__).parent))
+from embeddings import embed_text  # shared HF Inference API embedding call
 from router import GROQ_MODEL  # single source of truth for which Groq model to use
 
 ROUTE_AGGREGATE = "aggregate"
@@ -20,7 +20,6 @@ ROUTE_SPECIFIC  = "specific"
 ROUTE_HYBRID    = "hybrid"
 
 GROQ_API_KEY    = os.getenv("GROQ_API_KEY")
-EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 PROCESSED       = Path("data/processed")
 
 
@@ -28,13 +27,12 @@ def get_collection_name(username: str) -> str:
     return f"chess_{username.lower()}"
 
 
-# Module-level cache — the embedding model (and other clients) get
-# created ONCE, the first time get_clients() runs, then reused for
-# every subsequent call. Before this, get_clients() was called fresh
-# inside every single ask() request, which meant re-loading the whole
-# ONNX embedding model into memory on every question — a real
-# contributor to memory pressure on a small container (like Render's
-# free tier), not just wasted time.
+# Module-level cache — Qdrant/Groq clients get created ONCE, the first
+# time get_clients() runs, then reused for every subsequent call.
+# The embedding model itself is no longer part of this at all — since
+# switching to HF's Inference API (see embeddings.py), there's no
+# local model to load or cache; every embed call goes out over the
+# network instead of holding weights in this process's memory.
 _cached_clients = None
 
 
@@ -45,9 +43,8 @@ def get_clients():
             url=os.getenv("QDRANT_URL"),
             api_key=os.getenv("QDRANT_API_KEY")
         )
-        embed = TextEmbedding(EMBEDDING_MODEL)
         groq  = Groq(api_key=GROQ_API_KEY)
-        _cached_clients = (qdrant, embed, groq)
+        _cached_clients = (qdrant, groq)
     return _cached_clients
 
 
@@ -107,15 +104,14 @@ def retrieve_relevant_chunks(
     question: str,
     username: str,
     qdrant: QdrantClient,
-    embed_model: TextEmbedding,
     limit: int = 8
 ) -> list[dict]:
-    query_vector = next(iter(embed_model.embed([question])))
+    query_vector = embed_text(question)  # via HF Inference API
     collection   = get_collection_name(username)
 
     results = qdrant.query_points(
         collection_name=collection,
-        query=query_vector.tolist(),
+        query=query_vector,
         limit=limit
     ).points
 
@@ -183,7 +179,7 @@ def ask(question: str, username: str) -> str:
     """
     from router import classify_question, rewrite_query
 
-    qdrant, embed_model, groq_client = get_clients()
+    qdrant, groq_client = get_clients()
 
     route = classify_question(question, groq_client)
     print(f"Route: {route}")
@@ -201,7 +197,7 @@ def ask(question: str, username: str) -> str:
     if route == ROUTE_SPECIFIC or route == ROUTE_HYBRID:
         search_query = rewrite_query(question, groq_client)
         chunks       = retrieve_relevant_chunks(
-            search_query, username, qdrant, embed_model, limit=4
+            search_query, username, qdrant, limit=4
         )
         context = build_context(chunks)
         print("Used: vector search with rewritten query")

@@ -6,17 +6,16 @@ import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastembed import TextEmbedding
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
 sys.path.append(str(Path(__file__).parent))
 from chunker import chunk_all_games
+from embeddings import embed_texts
 
 load_dotenv()
 
-EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
-PROCESSED       = Path("data/processed")
+PROCESSED = Path("data/processed")
 
 
 def get_collection_name(username: str) -> str:
@@ -31,8 +30,9 @@ def get_qdrant_client() -> QdrantClient:
     )
 
 
-def get_embedding_model() -> TextEmbedding:
-    return TextEmbedding(EMBEDDING_MODEL)
+# get_embedding_model() removed — embeddings now come from HF's
+# Inference API (see embeddings.py), not a locally-loaded model.
+# This was the root cause of the Render OOM crash.
 
 
 def collection_exists(client: QdrantClient, username: str) -> bool:
@@ -60,19 +60,18 @@ def create_collection(client: QdrantClient, username: str):
     print(f"Created collection: {collection_name}")
 
 
-def embed_and_store(chunks: list[dict], client: QdrantClient,
-                    model: TextEmbedding, username: str):
+def embed_and_store(chunks: list[dict], client: QdrantClient, username: str):
     collection_name = get_collection_name(username)
     print(f"Embedding {len(chunks)} chunks...")
 
     texts      = [chunk["text"] for chunk in chunks]
-    embeddings = list(model.embed(texts))
+    embeddings = embed_texts(texts)  # via HF Inference API — see embeddings.py
 
     points = []
     for chunk, embedding in zip(chunks, embeddings):
         points.append(PointStruct(
             id=str(uuid.uuid4()),
-            vector=embedding.tolist(),
+            vector=embedding,  # already a plain list from embed_texts()
             payload={
                 "text":         chunk["text"],
                 "phase":        chunk["phase"],
@@ -131,9 +130,8 @@ def setup_user(username: str) -> dict:
     # Step 4: Embed + store
     print("\n[4/4] Embedding and storing in Qdrant...")
     client = get_qdrant_client()
-    model  = get_embedding_model()
     create_collection(client, username)
-    embed_and_store(chunks, client, model, username)
+    embed_and_store(chunks, client, username)
 
     return {
         "username":    username,

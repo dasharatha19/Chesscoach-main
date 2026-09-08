@@ -79,7 +79,10 @@ Respond ONLY with valid JSON like this exact format:
         start = raw.find("{")
         end   = raw.rfind("}") + 1
         return json.loads(raw[start:end])
-    except Exception: # noqa: BLE001 — LLM JSON output is unpredictable; fall back to neutral scores rather than crash the eval run
+    except Exception:  # noqa: BLE001 — this is parsing an LLM's raw
+        # judge-score response; ANY parse failure (malformed JSON,
+        # unexpected format) should fall back to a neutral default
+        # score, not crash the whole eval run over one bad response.
         return {"faithfulness": 0.5, "answer_relevancy": 0.5, "context_precision": 0.5, "reason": "parse error"}
 
 
@@ -103,7 +106,7 @@ def run_evaluation():
         from retriever import get_aggregate_stats
         from router import classify_question
 
-        qdrant, embed_model, groq_client_inner = get_clients()
+        qdrant, groq_client_inner = get_clients()
         route = classify_question(question, groq_client)
         print(f"Route: {route}")
 
@@ -112,7 +115,7 @@ def run_evaluation():
         if route in ["aggregate", "hybrid"]:
             parts.append(get_aggregate_stats(EVAL_USERNAME))
         if route in ["specific", "hybrid"]:
-            chunks = retrieve_relevant_chunks(question, EVAL_USERNAME, qdrant, embed_model, limit=4)
+            chunks = retrieve_relevant_chunks(question, EVAL_USERNAME, qdrant, limit=4)
             parts.append(build_context(chunks))
 
         real_context = "\n\n".join(parts)
@@ -120,7 +123,9 @@ def run_evaluation():
         # ✅ FIX 1: Generate the answer first before scoring
         try:
             answer = ask_groq(question, real_context, groq_client_inner, EVAL_USERNAME)
-        except Exception: # noqa: BLE001 — one bad question must not abort the rest of the eval run
+        except Exception:  # noqa: BLE001 — an eval-harness script:
+            # any failure generating one test answer should be logged
+            # and skipped, not stop the whole evaluation run.
             answer = "error generating answer"
         print(f"Answer: {answer[:120]}...")
 
@@ -129,7 +134,8 @@ def run_evaluation():
             scores = score_answer_with_llm(
                 question, answer, real_context, reference, groq_client
             )
-        except Exception as e:   # noqa: BLE001 — scorer call can fail in many ways; log and continue rather than abort the eval run
+        except Exception as e:  # noqa: BLE001 — same reasoning: one
+            # bad scoring call shouldn't abort the whole eval run.
             print(f"Scorer error: {e}")
             scores = {
                 "faithfulness": 0.5,

@@ -22,6 +22,14 @@ by Added / Changed / Fixed / Removed.
 - `TODO.md` / `ROADMAP.md` — ongoing project tracking docs.
 
 ### Changed
+- **Embeddings now come from Hugging Face's Inference API instead of a
+  locally-loaded model** — new shared `src/embeddings.py`, used by
+  both `embedder.py` and `retriever.py`. Removed `fastembed` (and its
+  `onnxruntime` dependency) from `pyproject.toml` entirely. This is
+  the fix for the Render `"Ran out of memory (used over 512MB)"`
+  crash — confirmed locally that a real API call returns a correct
+  384-dim vector; full end-to-end confirmation on deployed Render
+  still pending.
 - Centralized the Groq model name into one `GROQ_MODEL` constant
   (env-var overridable) instead of 4 separate hardcoded strings.
 - `retriever.py`'s `get_clients()` now caches the embedding model at
@@ -36,6 +44,12 @@ by Added / Changed / Fixed / Removed.
   ping with HEAD by default).
 
 ### Fixed
+- `src/embeddings.py` was missing its own `load_dotenv()` call, unlike
+  every other file in `src/` — caused a `401 Unauthorized` from HF's
+  API when run standalone, since `HF_TOKEN` was never actually loaded
+  into the environment. Fixed for consistency with the rest of the
+  codebase's pattern (every module loads its own env, doesn't rely on
+  import order).
 - `app.py` — removed ~30 lines of unreachable dead code sitting inside
   `setup_status()` (leftover from an older synchronous setup flow,
   left behind after refactoring to the current background-thread

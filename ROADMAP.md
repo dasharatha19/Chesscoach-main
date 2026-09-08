@@ -104,23 +104,32 @@ before it being solid. Status is honest: ✅ done & verified, 🟡 started,
   by current cloud-based code) added, preventing accidental commit of
   ~7MB of binary vector data.
 - ✅ `retriever.py`'s `get_clients()` was rebuilding the embedding model
-  from scratch on EVERY `/ask` call — now cached at module level after
-  first load, reused for all later calls. Likely contributor to Render
-  memory pressure (fixed, not yet re-confirmed under real load).
+  from scratch on EVERY `/ask` call — originally fixed via module-level
+  caching. **Now moot** — the HF Inference API migration removed the
+  local embedding model from `get_clients()` entirely, so there's
+  nothing left to cache or reload in the first place.
 - ✅ `ruff` lint findings on `retriever.py` (import ordering, one
   `RUF015` generator-slicing fix) — cleaned, `ruff check` passes clean
   on this file now. Other files not yet linted by you.
-- 🟡 **Render free-tier spin-down** — confirmed via Render logs the
-  service was sleeping after ~15 min idle, then sitting dark for
-  1.5–5 hours before the next wake. Root cause found: GitHub Actions'
-  `schedule` trigger is documented as unreliable for tight intervals
-  (`*/10 * * * *` only fired ~6 times over 24h instead of ~144 expected
-  — confirmed directly from the Actions run history timestamps).
-  **Fix in progress: switching to UptimeRobot** (external, purpose-built
-  ping service, 5-min interval) instead of relying on GitHub's cron.
-  `keep-alive.yml` left in the repo but no longer the actual mechanism.
-  **Not yet confirmed fixed** — need to watch Render logs post-UptimeRobot
-  setup for a `"Shutting down"`-free stretch.
+- 🟡 **Render free-tier spin-down** — root cause found: GitHub Actions'
+  `schedule` trigger unreliable for tight intervals, confirmed from
+  Actions run-history timestamps. Switched to **UptimeRobot** (5-min
+  interval). **Looks fixed** — a multi-hour stretch of clean
+  `HEAD / 200 OK` pings with zero `"Shutting down"` lines observed —
+  but not yet confirmed over a full day/week of continuous uptime.
+  `keep-alive.yml` left in the repo, no longer the actual mechanism.
+- ✅ **Render OOM crash** (`"Ran out of memory (used over 512MB)"`,
+  confirmed directly from Render's own error message) — root cause:
+  the local embedding model (fastembed/ONNX) being loaded into the
+  container's memory, sometimes twice (see the old Layer 6 entry this
+  replaces). **Fixed by removing local model loading entirely** —
+  migrated to Hugging Face's Inference API (new `src/embeddings.py`,
+  shared by `embedder.py` and `retriever.py`). `fastembed` (and its
+  heavy `onnxruntime` dependency) removed from `pyproject.toml`
+  entirely. Confirmed locally: a real HF API call returns a correct
+  384-dim vector (matches Qdrant's expected vector size exactly).
+  **Not yet confirmed on Render** — needs a real `/setup` run against
+  deployed pre-prod, watching memory, before calling this fully closed.
 
 ## Layer 6 — Things noticed but not yet decided on
 
@@ -137,17 +146,12 @@ before it being solid. Status is honest: ✅ done & verified, 🟡 started,
   PGN upload is the cheapest next step; Stockfish enrichment is the
   highest-value one for actual coaching quality.
 - **`embedder.py` and `retriever.py` each independently create their
-  own `TextEmbedding` instance** — during a real `/setup` run, the log
-  showed "Fetching 5 files" (the HuggingFace model download) happen
-  **twice** in one deploy: once in `embedder.py` during game embedding,
-  once again in `retriever.py`'s `get_clients()` on the first `/ask`.
-  The `get_clients()` caching fix (Layer 5) only prevents *repeat*
-  loads within `retriever.py` itself — it doesn't share a model
-  instance with `embedder.py`'s separate copy. Net effect: up to two
-  full embedding-model instances resident in memory at once, on a
-  memory-constrained free-tier container. Noticed, not yet fixed —
-  real fix would be a single shared embedding-model singleton used by
-  both files, not two independent ones.
+  own `TextEmbedding` instance** — ~~Noticed, not yet fixed~~
+  **Superseded — see Layer 5's "Render OOM crash" entry.** Rather than
+  sharing one local model instance between the two files, both local
+  loading paths were removed entirely in favor of HF's Inference API.
+  This didn't just fix the duplication, it eliminated local model
+  memory usage altogether.
 
 ## Layer 7 — Planned: RAG quality evaluation (RAGAS / DeepEval)
 
@@ -172,10 +176,10 @@ fixed — not started now.**
 ---
 
 **Suggested order from here, staying one-thing-at-a-time:**
-1. **Set up UptimeRobot, confirm Render stops showing "Shutting down" in its logs.** Current top priority — everything else waits on a stable, always-on backend to test against.
-2. Investigate the double embedding-model-load issue (Layer 6) — likely helps the memory/stability picture further.
-3. Fix the two remaining `app.py` Layer-5 items (dead code + unreachable block) — small, isolated.
-4. Investigate the empty query-rewrite issue.
+1. **Run a full local `/setup` (real batched chunks, not just one test sentence), then push the HF embeddings migration to `staging`, redeploy pre-prod, and confirm the OOM crash is actually gone under real load.** Current top priority.
+2. Fix the remaining `app.py` Layer-5 item (unused `BackgroundTasks` param) — small, isolated.
+3. Investigate the empty query-rewrite issue.
+4. Confirm UptimeRobot's fix holds over a longer stretch (a day+) before fully trusting it.
 5. Then move to Layer 3 (Render + Vercel CD setup — staging/prod split).
 6. Layer 4 hygiene items can be picked off individually, anytime, since none of them depend on each other.
-7. **Layer 7 (RAGAS/DeepEval)** — once everything above is stable, not before.
+7. **Layer 7 (RAGAS/DeepEval)** — once everything above is stable, not before. (DeepEval was the agreed pick — pytest-native, plugs into the existing `ci.yml`.)
