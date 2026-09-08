@@ -173,6 +173,91 @@ fixed — not started now.**
   these, or retire it once RAGAS covers the same ground with less
   custom code to maintain.
 
+### Layer 8 — Multi-modal / alternate data ingestion (NOT STARTED)
+ 
+Priority order, cheapest-and-safest first — do NOT try to solve all
+of these at once:
+ 
+- ⬜ **PGN upload** (cheapest, do first). Reuses `parse_pgn.py`
+  directly. **Hard-blocked on TODO.md item #1 (`played_as` defaulting
+  bug)** — an uploaded PGN is untrusted input where the username might
+  not appear in the game at all, which is exactly the case that bug
+  breaks on. Fix the bug first, then wire the upload endpoint.
+- ⬜ **Lichess import.** Different API (Lichess has its own PGN export
+  + a documented, actually-versioned REST API), same shape of problem
+  as Chess.com: needs its own fetch → validate → adapt step. Don't
+  try to force it through the Chess.com-shaped adapter — write a
+  second adapter that outputs the *same internal schema*
+  (`played_as`, `my_rating`, etc.), so `chunker.py`/`embedder.py`
+  downstream don't need to know which source a game came from.
+- ⬜ **Screenshot / board-image input.** Needs a vision model or
+  chess-specific board-recognition (FEN-from-image). Meaningfully
+  higher effort and higher error rate than the above — a misread
+  square silently produces a wrong position, which then produces
+  confidently wrong coaching advice. Do not start this before PGN
+  upload and Lichess import are solid; a bad OCR read is a much worse
+  failure mode than a missing feature.
+- ⬜ **Video / livestream links.** Out of scope for now — frame-by-
+  frame board recognition from video is a research-grade problem on
+  its own, not a weekend feature. Don't plan around this until
+  everything above is done.
+- ⬜ **Text/book input** (chess theory PDFs, notes). Different problem
+  entirely — this is generic RAG-over-documents (chunk + embed static
+  text), not game-data parsing. Could reuse `embedder.py`'s Qdrant
+  client but needs its own chunking strategy (paragraph/section based,
+  not phase-based). Treat as a separate mini-project, not an extension
+  of the game-parsing pipeline.
+**Decision (from doubts.txt 2.1):** use `python-chess`'s real PGN
+parser for all of these, never regex — already your own conclusion,
+confirmed correct. Regex PGN parsing breaks on variations, comments,
+and NAG annotations that a real parser handles for free.
+ 
+### Layer 9 — Response caching (decision made, not yet built)
+ 
+- ⬜ Cache `/ask` responses keyed on
+  `(username, route, normalized_question, data_version)`.
+  - `data_version` = a counter/timestamp bumped every time that
+    user's data is re-synced via `/setup`. This is the part that's
+    easy to get wrong — without it, a cached answer survives a data
+    refresh and serves stale stats.
+  - `normalized_question` = lowercased + whitespace-collapsed at
+    minimum; don't over-engineer this into semantic-similarity
+    caching yet, that's a v2 problem.
+- ⬜ Start with a plain in-memory dict + TTL (or `functools.lru_cache`
+  wrapping a keyed function) — **not Redis yet.** Redis only earns its
+  keep once you have multiple server instances (Layer 3's CD plan
+  doesn't include horizontal scaling yet), and an in-memory cache
+  disappearing on redeploy is an acceptable trade-off at this stage.
+- ⬜ Only cache the `aggregate` and `specific` routes' final answers —
+  don't cache at the retrieval layer separately from the generation
+  layer, that's two caches to keep consistent for one win.
+
+### Layer 10 — Chess.com API resilience (decision made, partially already in place)
+ 
+Your header-validation layer (`RawGameHeaders`/`validate_game_headers`,
+already shipped per `CHANGELOG.md`) **is** most of an adapter pattern —
+fetch → validate → transform is already structurally separated. What's
+still missing is the part that would actually catch an API schema
+change instead of just reacting to it after the fact:
+ 
+- ⬜ **Contract test**, not just runtime validation. A scheduled job
+  (can reuse the existing GitHub Actions cron, or better — since
+  Layer 5 found GitHub's cron unreliable, use the already-adopted
+  UptimeRobot-style external scheduler) that fetches ONE known-stable
+  public game (e.g. a fixed well-known username/month) and asserts
+  the field shape matches expectations. This is what tells you "Chess.com
+  changed something" within minutes instead of when a user reports a
+  broken `/setup`.
+- ⬜ Route the existing >20%-batch-failure warning (already implemented
+  per `CHANGELOG.md`) to actual monitoring (Sentry — already on your
+  Layer 4 hygiene list) instead of console-only, so it surfaces even
+  when nobody's watching logs.
+- **Decision (doubts.txt 1.1):** don't build a heavier abstraction than
+  this. A full "adapter interface with pluggable backends" is
+  over-engineering for one data source plus one planned second source
+  (Lichess) — the validate-then-transform pattern you already have,
+  repeated per-source, is enough.
+
 ---
 
 **Suggested order from here, staying one-thing-at-a-time:**
