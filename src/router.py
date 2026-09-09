@@ -33,38 +33,62 @@ ROUTE_HYBRID    = "hybrid"      # needs both
 
 def classify_question(question: str, groq_client: Groq) -> str:
     """
-    Uses a tiny LLM call to classify the question type.
-    Fast and cheap — we use a small model for routing.
+    Query routing — decides whether a question needs:
+    - "aggregate": exact pandas stats over ALL games (e.g. win rate)
+    - "specific": vector search for example games/moments
+    - "hybrid": both
 
-    Examples:
-    "Do I win more as White or Black?"   → aggregate
-    "Why did I lose on 2025-03-10?"      → specific
-    "What is my biggest weakness?"       → hybrid
-    "Give me a study plan"               → hybrid
+    NOTE: I don't have live access to your original classify_question()
+    right now (sandbox reset earlier this conversation), so this is
+    rebuilt from what we established together, not a diff of your real
+    file. Please compare this against what's actually in router.py and
+    adjust the prompt wording if it differs — the important part is
+    the parameter/fallback changes below, not the exact prompt text.
     """
-    prompt = f"""Classify this chess question into exactly one category.
+    prompt = f"""Classify this chess coaching question into exactly ONE category:
+
+- aggregate: needs overall statistics (win rate, totals, averages)
+- specific: needs example games or specific moments
+- hybrid: needs both statistics AND examples
 
 Question: {question}
 
-Categories:
-- aggregate: needs statistics across many games (win rates, totals, comparisons, "most often", "best", "worst", "overall", "weakness", "strength", "improve")
-- specific: needs details from specific games (particular date, particular opening, particular opponent)
-- hybrid: needs both statistics AND specific examples to answer well (study plan, detailed breakdown)
-
-Reply with ONLY one word: aggregate, specific, or hybrid"""
+Reply with ONLY one word: aggregate, specific, or hybrid."""
 
     response = groq_client.chat.completions.create(
-        model=GROQ_MODEL,
+        model="openai/gpt-oss-20b",  # switched from gpt-oss-120b — this
+        # task is simple one-word classification, doesn't need the
+        # larger model's reasoning depth. Faster, and draws from a
+        # SEPARATE free-tier quota than the main answer-generation calls.
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
-        max_tokens=10      # we only need one word
+        max_tokens=50,          # raised from 10 — same reasoning-token
+                                 # issue as rewrite_query: 10 tokens is
+                                 # an extremely tight budget for a
+                                 # reasoning model, plausibly why every
+                                 # question was landing on the same
+                                 # answer regardless of actual content.
+        reasoning_effort="low",  # minimize reasoning spend on this
+                                  # simple classification task.
     )
 
     route = response.choices[0].message.content.strip().lower()
 
-    # safety fallback
-    if route not in [ROUTE_AGGREGATE, ROUTE_SPECIFIC, ROUTE_HYBRID]:
-        return ROUTE_HYBRID
+    # Same diagnostic as rewrite_query — real proof, not inference.
+    usage = response.usage
+    reasoning_tokens = getattr(usage.completion_tokens_details, "reasoning_tokens", None) if hasattr(usage, "completion_tokens_details") else None
+    print(f"  [classify_question diagnostics] finish_reason={response.choices[0].finish_reason}, "
+          f"reasoning_tokens={reasoning_tokens}, completion_tokens={usage.completion_tokens}, "
+          f"max_tokens_budget=50")
+
+    valid_routes = {"aggregate", "specific", "hybrid"}
+    if route not in valid_routes:
+        # Defensive fallback — if the model returns something empty,
+        # malformed, or unexpected, default to "hybrid" rather than
+        # crash or silently misroute. Hybrid is the safest default
+        # since it includes both data sources.
+        print(f"Route classification returned unexpected value: {route!r} — defaulting to 'hybrid'")
+        return "hybrid"
 
     return route
 
@@ -109,6 +133,17 @@ Reply with ONLY the rewritten search query, nothing else."""
     )
 
     rewritten = response.choices[0].message.content.strip()
+
+    # Diagnostic — shows the REAL reasoning-token spend, so we know
+    # for certain whether reasoning is eating the budget, instead of
+    # just inferring it from an empty result. Check this in your logs
+    # after testing — if reasoning_tokens is close to max_tokens (150),
+    # the budget genuinely isn't enough and needs raising further.
+    usage = response.usage
+    reasoning_tokens = getattr(usage.completion_tokens_details, "reasoning_tokens", None) if hasattr(usage, "completion_tokens_details") else None
+    print(f"  [rewrite_query diagnostics] finish_reason={response.choices[0].finish_reason}, "
+          f"reasoning_tokens={reasoning_tokens}, completion_tokens={usage.completion_tokens}, "
+          f"max_tokens_budget=150")
 
     if not rewritten:
         # Defensive fallback — if reasoning still consumes the whole
