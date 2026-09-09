@@ -71,10 +71,10 @@ Reply with ONLY one word: aggregate, specific, or hybrid"""
 def rewrite_query(question: str, groq_client: Groq) -> str:
     """
     Query rewriting — modern RAG technique.
-    Rewrites the user's casual question into a 
+    Rewrites the user's casual question into a
     search-optimized query for better vector retrieval.
-    
-    "what is my biggest weakness?" 
+
+    "what is my biggest weakness?"
     → "chess losses blunders mistakes weak openings losing games"
     """
     prompt = f"""You are a search query optimizer for a chess game database.
@@ -92,9 +92,32 @@ Reply with ONLY the rewritten search query, nothing else."""
         model=GROQ_MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
-        max_tokens=30
+        max_tokens=150,        # raised from 30 — gpt-oss-120b is a
+                                # REASONING model that spends completion
+                                # tokens on internal chain-of-thought
+                                # BEFORE writing visible content. 30
+                                # tokens was very likely being consumed
+                                # entirely by reasoning, leaving nothing
+                                # for the actual rewritten query —
+                                # confirmed as a known, documented
+                                # failure mode for gpt-oss models with
+                                # small token budgets.
+        reasoning_effort="low",  # minimize (can't fully disable for
+                                  # gpt-oss models — only "low"/"medium"/
+                                  # "high" supported) reasoning spend
+                                  # on this simple, non-reasoning task.
     )
 
     rewritten = response.choices[0].message.content.strip()
+
+    if not rewritten:
+        # Defensive fallback — if reasoning still consumes the whole
+        # budget despite the above (or for any other reason), fall
+        # back to the ORIGINAL question instead of silently embedding
+        # an empty string, which is semantically meaningless and
+        # degrades vector search with no visible error.
+        print(f"Query rewritten: '{question}' → (empty — falling back to original question)")
+        return question
+
     print(f"Query rewritten: '{question}' → '{rewritten}'")
     return rewritten
