@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
 from db import check_db_connection
 
 sys.path.append(str(Path(__file__).parent / "src"))
@@ -129,7 +130,6 @@ def ready():
         checks["qdrant_connection"] = f"FAILED: {e}"
         all_ok = False
 
-    #
     try:
         check_db_connection()
         checks["supabase_connection"] = "ok"
