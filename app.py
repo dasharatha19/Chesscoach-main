@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from db import check_db_connection
 
 sys.path.append(str(Path(__file__).parent / "src"))
 
@@ -128,6 +129,15 @@ def ready():
         checks["qdrant_connection"] = f"FAILED: {e}"
         all_ok = False
 
+    #
+    try:
+        check_db_connection()
+        checks["supabase_connection"] = "ok"
+    except Exception as e:  # noqa: BLE001 — same reasoning as the Qdrant
+        # check above: catch ANY failure reaching the DB, not one specific type.
+        checks["supabase_connection"] = f"FAILED: {e}"
+        all_ok = False
+
     status_code = 200 if all_ok else 503
     return JSONResponse(
         status_code=status_code,
@@ -155,6 +165,21 @@ def health_db():
             "collection_count": len(collections.collections),
         }
     except Exception as e:  # noqa: BLE001 — same reasoning as /ready above
+        latency_ms = round((time.monotonic() - start) * 1000, 1)
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unreachable", "latency_ms": latency_ms, "error": str(e)}
+        )
+
+@app.get("/health/supabase")
+def health_supabase():
+    import time
+    start = time.monotonic()
+    try:
+        check_db_connection()
+        latency_ms = round((time.monotonic() - start) * 1000, 1)
+        return {"status": "ok", "latency_ms": latency_ms}
+    except Exception as e:  # noqa: BLE001 — same reasoning as /health/db
         latency_ms = round((time.monotonic() - start) * 1000, 1)
         return JSONResponse(
             status_code=503,
@@ -262,5 +287,12 @@ def suggested_questions():
             "What patterns do you see in my endgame losses?",
             "Give me a personalized study plan for this week",
             "Which opponent type do I struggle against most?",
+            "What's my win rate?",
+	        "Show me a game where I lost quickly",
+	        "Why do I keep losing? What's my biggest weakness?",	
+	        "How many games have I played as Black?",	
+            "What openings should I study based on my losses?",
         ]
     }
+
+

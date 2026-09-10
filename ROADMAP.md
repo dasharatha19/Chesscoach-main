@@ -57,9 +57,17 @@ before it being solid. Status is honest: ✅ done & verified, 🟡 started,
 - ⬜ **Dependabot** (`.github/dependabot.yml`) — free, built into GitHub,
   opens automatic PRs when a dependency has a security fix. Cheap to
   turn on.
-- ⬜ Swap `print()` statements (throughout `fetch_games.py`, `embedder.py`,
-  `parse_pgn.py`, etc.) for Python's `logging` module with levels — hard
-  to search/filter raw prints once this is actually deployed on Render.
+- 🔺 **ELEVATED PRIORITY** (was a routine hygiene item, now justified by
+  direct experience): swap `print()` statements for Python's `logging`
+  module with real levels (`DEBUG`/`INFO`/`WARNING`/`ERROR`) throughout
+  `fetch_games.py`, `embedder.py`, `parse_pgn.py`, `router.py`,
+  `retriever.py`. **Why this jumped priority:** the entire OOM crash,
+  model deprecation, `401`, and reasoning-token investigations this
+  session were all diagnosed by manually scrolling unstructured Render
+  logs where a real error looks identical to a routine health-check
+  ping. A real `logging` setup would let Render's log view be filtered
+  by severity — "show me only real problems" — instead of scrolling
+  hundreds of `HEAD / 200 OK` lines to find the one that matters.
 - ⬜ Basic error monitoring (e.g. free-tier Sentry) — right now, if `/ask`
   throws in production, you only find out if a user tells you.
 - ⬜ `.env.example` — a committed template (no real secrets) listing
@@ -96,9 +104,48 @@ before it being solid. Status is honest: ✅ done & verified, 🟡 started,
   that `/setup-status` behavior is unaffected.
 - ⬜ `router.py`'s `rewrite_query()` — observed returning an **empty
   string** on a real question during testing (`Query rewritten:
-  '...' → ''`). Pipeline didn't crash (fell through to unrewritten
-  vector search), but worth investigating why the rewrite came back
-  blank — noticed, not yet root-caused.
+  '...' → ''`). ~~Pipeline didn't crash... not yet root-caused.~~
+  **ROOT-CAUSED AND FIXED:** `openai/gpt-oss-120b` is a *reasoning*
+  model — it spends completion tokens on internal chain-of-thought
+  BEFORE writing visible content. `max_tokens=30` was too small a
+  budget; reasoning was consuming it entirely, leaving nothing for
+  actual output. **Confirmed directly** via Groq's own
+  `reasoning_tokens` usage field: a real test showed 60 reasoning
+  tokens consumed against the old 30-token budget — structurally
+  impossible to have worked. Fix: raised `max_tokens` to 150, added
+  `reasoning_effort="low"`, added a defensive fallback to the original
+  question if still empty, switched to `openai/gpt-oss-20b` (separate
+  quota from the main answer-generation model, faster). **Confirmed
+  working** on a real deployed test — `finish_reason=stop`, real
+  rewritten query produced.
+- ⬜ `router.py`'s `classify_question()` — **same suspected root cause**
+  as above (even tighter old budget, `max_tokens=10`), circumstantial
+  evidence was every question routing to `hybrid` regardless of
+  content. **Confirmed via diagnostics**: old budget (10) was smaller
+  than a single real test's `reasoning_tokens=33` — same structural
+  impossibility. Same fix applied (raised to `max_tokens=50`,
+  `reasoning_effort="low"`, `gpt-oss-20b`, explicit `valid_routes`
+  fallback defaulting to `"hybrid"` on any unexpected output).
+  **Confirmed working** on a real test — correctly classified an
+  example-seeking question as `specific`, not reflexively `hybrid`.
+- 🟡 **New, separate issue found while verifying the above:**
+  `rewrite_query()`'s prompt instructs the model to inject a game
+  phase and a piece color into every rewrite (even when the user's
+  original question specified neither) — observed turning "show me a
+  game where I lost quickly" into "quick loss **opening white**,"
+  inventing specifics the user never stated. This could actively
+  *narrow* vector search away from the correct chunk (e.g. if the
+  real fastest loss was as Black, or a middlegame blunder). **Not
+  fixed reactively** — deliberately deferred to be measured properly
+  once DeepEval (Layer 7) is running, using `context_precision` to
+  compare rewrite-on vs. rewrite-off / prompt-adjusted vs. not, with
+  real data instead of judging from one example.
+- 🟡 **Diagnostic logging added to `rewrite_query`/`classify_question`**
+  (`reasoning_tokens`, `finish_reason`, `completion_tokens` per call)
+  — deliberately temporary/testing-phase. Once fully trusted (no more
+  `finish_reason=length` ever observed), downgrade these from plain
+  `print()` to `logger.debug()` rather than deleting them outright —
+  see the elevated logging item below.
 - ✅ `.gitignore` — `qdrant_storage/` (stale local Qdrant data, unused
   by current cloud-based code) added, preventing accidental commit of
   ~7MB of binary vector data.
@@ -189,6 +236,50 @@ cheapest to most robust:
 
 Not designed or built yet — needs a decision before Tier 1 can be
 trusted in production at any real scale.
+
+**Update — leaning decision, not yet built:** discussed using
+**Supabase** (hosted Postgres + a real web dashboard) instead of
+either a plain CSV file or a self-managed Postgres instance — solves
+the persistence gap AND the "how do I actually look at this data"
+problem in one move, since self-hosted Postgres alone would still need
+a separate tool just to browse tables. Bundled with a second,
+related, deliberately-deferred decision: whether to remove/raise the
+current 6-month game history cap (`fetch_games.py`) once there's a
+real persistent store capable of holding full account history instead
+of just a recent window. Both explicitly parked for later — not
+started.
+
+**Decision confirmed, migration in progress:**
+- ✅ Moving forward with Supabase (Postgres). Confirmed: free tier
+  allows 2 active projects, well-suited to a staging/prod split.
+- 🟡 **Constraint found:** account already has 1 of 2 free Supabase
+  project slots used by an unrelated project — only 1 slot available
+  for ChessCoach. **Resolution (pending confirmation):** use ONE
+  Supabase project with two Postgres **schemas** (`prod`, `staging`)
+  rather than two separate projects — genuinely isolated (a query
+  against `prod.games` cannot touch `staging.games`), and arguably the
+  more correct Postgres-native solution regardless of slot
+  availability, not just a workaround.
+- ✅ **RLS (Row Level Security) — decided OFF / not applicable.**
+  Reasoning: the backend connects via a direct Postgres connection
+  string using the `postgres` role, which bypasses RLS regardless of
+  its setting — RLS only matters if the frontend ever queries Supabase
+  directly via their client SDK, which this architecture doesn't do.
+  Revisit only if that changes.
+- ✅ `src/db.py` created — shared Postgres connection module
+  (`get_db_connection()`, `check_db_connection()`), same pattern as
+  `embeddings.py` for HF. `psycopg2-binary` added as a dependency.
+  **Not yet tested against a live Supabase instance.**
+- 🟡 `/ready` extended with a Supabase connectivity check; new
+  `/health/supabase` endpoint added (mirrors the existing
+  `/health/db` Qdrant-latency pattern). **Written but unverified** —
+  no live Supabase project connected yet to test against.
+- ⬜ Still needed before this is usable: the actual `games` table
+  schema (blocked on getting real CSV column names / `extract_game_data()`
+  from the user), migrating `get_aggregate_stats()` and the `/setup`
+  pipeline to read/write Postgres instead of the local CSV, and
+  extending UptimeRobot's ping target (or `/ready`) to prevent the
+  free Supabase project's 7-day inactivity auto-pause.
 
 ## Layer 7 — Planned: RAG quality evaluation (RAGAS / DeepEval)
 
@@ -299,15 +390,58 @@ already reflected here — good convergence signal, not new direction.
   Add observability → generate real load → read the actual numbers →
   fix the specific thing the numbers point at.
 
+## Layer 12 — Agentic tool-calling (design agreed, not started — depends on Layer 6's Supabase work landing first)
+
+**Correctly identified:** the current app is a fixed RAG *pipeline*
+(hardcoded classify → rewrite → retrieve → generate), not an *agent*
+— the LLM never decides for itself that it needs more data than
+what's already loaded; every step is predetermined in Python.
+
+- ✅ **Feasibility confirmed:** `gpt-oss-120b`/`gpt-oss-20b` on Groq
+  genuinely support real function/tool calling ("local tool calling"
+  — custom functions you define, as opposed to Groq's server-side
+  built-in tools like `browser_search`), explicitly marketed for
+  agentic use.
+- ✅ **Design decision — two separate problems, not one:**
+  1. *"Does the data exist in storage yet?"* — a storage/sync
+     problem, solved by Supabase becoming an incrementally-growing
+     persistent store (Layer 6), independent of any single
+     conversation.
+  2. *"Does the LLM know when it needs more than what's loaded?"* —
+     the actual agentic piece: a tool like
+     `query_extended_history(username, date_range)` that queries
+     **already-stored** Supabase data (fast SQL, no blocking live
+     call). If data isn't synced yet, the tool reports that and
+     *separately* triggers a background resync (same fire-and-poll
+     pattern as the existing `/setup` flow) — never a live,
+     synchronous Chess.com fetch inside a chat response.
+- **Why not a literal "agent calls Chess.com live" design:**
+  Chess.com's API only supports reliable *serial* requests (see
+  Layer 10) — fetching a very active player's full history live,
+  inside one chat turn, could take tens of seconds to minutes. Bad UX,
+  avoidable by separating sync from query as above.
+- ⬜ Not started. Explicitly sequenced AFTER Supabase (Layer 6) is
+  fully working — no sensible "extended history" tool to build while
+  the underlying storage is still an ephemeral CSV.
+
+### Related future feature — "compare me to a star player" (noted, not started)
+
+Different from the above — this is **public, shared reference data**
+(famous players' games), not a user's own private history. Should NOT
+live in the per-user-isolated pattern (not per-user Qdrant
+collections, not per-user Postgres rows) — needs its own separate,
+shared table (e.g. `reference_games`, no `username` column) queryable
+by every user. Distinct feature, not part of the current Supabase
+migration.
+
 ---
 
 **Suggested order from here, staying one-thing-at-a-time:**
-1. **Fix the `uv.lock` staleness, confirm the HF embeddings migration
-   is actually running on Render** (not just pushed) — current top
-   priority, since the OOM fix isn't real until this is confirmed.
-2. Decide the Tier 1 persistence question (Layer 6) — at minimum,
-   confirm whether `data/processed/` is actually surviving Render
-   redeploys today, before trusting aggregate stats in production.
+1. **Supabase migration (Layer 6)** — currently in progress. Confirm
+   the 1-slot/schema-split plan, get the real CSV schema, build
+   `games` table(s), migrate `get_aggregate_stats()` + `/setup`, test
+   `/ready` and `/health/supabase` against the real instance, extend
+   UptimeRobot/`/ready` to prevent the 7-day auto-pause.
 3. Add timing logs to `/ask` (Layer 11) — cheap, and needed before any
    concurrency testing means anything.
 4. Fix the remaining `app.py` Layer-5 item (unused `BackgroundTasks`
