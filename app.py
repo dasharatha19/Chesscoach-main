@@ -287,11 +287,6 @@ def suggested_questions():
             "What patterns do you see in my endgame losses?",
             "Give me a personalized study plan for this week",
             "Which opponent type do I struggle against most?",
-            "What's my win rate?",
-	        "Show me a game where I lost quickly",
-	        "Why do I keep losing? What's my biggest weakness?",	
-	        "How many games have I played as Black?",	
-            "What openings should I study based on my losses?",
         ]
     }
 
