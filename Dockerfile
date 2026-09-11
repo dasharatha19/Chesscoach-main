@@ -31,8 +31,13 @@ RUN mkdir -p data/raw_pgn data/processed
 # Make sure .venv binaries are on PATH
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Pre-download the embedding model at build time
-RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
+# NOTE: the old "pre-download the embedding model at build time" step
+# (RUN python -c "from fastembed import TextEmbedding; ...") has been
+# REMOVED here. It predates the migration to Hugging Face's Inference
+# API — embeddings now come from a network call (src/embeddings.py),
+# not a locally-loaded model, so there's nothing to pre-download
+# anymore. Leaving it in was wasting real build time and image space
+# on something the running app never uses.
 
 # Expose FastAPI port
 EXPOSE 8000
