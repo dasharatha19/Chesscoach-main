@@ -9,10 +9,9 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from db import check_db_connection
-
 sys.path.append(str(Path(__file__).parent / "src"))
 
+from db import check_db_connection
 from embedder import collection_exists, get_qdrant_client, setup_user
 from retriever import ask
 
