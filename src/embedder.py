@@ -123,6 +123,17 @@ def setup_user(username: str) -> dict:
     df.to_csv(csv_path, index=False)
     print(f"Parsed {len(df)} games")
 
+    # Mirror into Postgres — best-effort. The CSV above is the durable
+    # copy in the Render container; if Supabase is unreachable this
+    # just logs and moves on, so /setup never fails because of it.
+    try:
+        from db import insert_games
+        synced = insert_games(username, df)
+        print(f"Synced {synced} games to Postgres")
+    except Exception as e:  # noqa: BLE001 — any DB failure here should
+        # degrade to "CSV only", not break setup.
+        print(f"Postgres sync skipped ({e}) — continuing on CSV only")
+
     # Step 3: Chunk
     print("\n[3/4] Chunking games...")
     chunks = chunk_all_games(csv_path)

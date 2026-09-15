@@ -62,3 +62,85 @@ def check_db_connection() -> bool:
         return True
     finally:
         conn.close()
+
+
+# ── games table — write/read path ───────────────────────────────────
+#
+# Postgres is the primary path; the CSV written alongside it in
+# embedder.py's setup_user() is the fallback if Supabase is ever
+# unreachable — see get_games_df() below and get_aggregate_stats()
+# in retriever.py, which tries this first and falls back to CSV on
+# any exception here.
+
+_GAMES_COLUMNS = [
+    "username", "date", "played_as", "result", "opening", "eco",
+    "my_rating", "opponent", "opp_rating", "my_accuracy", "opp_accuracy",
+    "time_control", "termination", "opening_moves", "middlegame_moves",
+    "endgame_moves", "total_moves",
+]
+
+
+def insert_games(username: str, df) -> int:
+    """
+    Replaces all stored rows for this user with the current DataFrame.
+    There's no stable per-game ID coming out of parse_pgn.py yet (see
+    migrations/001_create_games_table.sql), so this mirrors the CSV's
+    existing behavior — df.to_csv() overwrites the whole file on every
+    /setup run — rather than trying to dedupe/append. A re-run here
+    means "fresh full refresh," same as the CSV.
+    """
+    import pandas as pd
+
+    rows = [
+        (
+            username, r.date, r.played_as, r.result, r.opening, r.eco,
+            int(r.my_rating), r.opponent, int(r.opp_rating),
+            None if pd.isna(r.my_accuracy) else float(r.my_accuracy),
+            None if pd.isna(r.opp_accuracy) else float(r.opp_accuracy),
+            r.time_control, r.termination, r.opening_moves,
+            r.middlegame_moves, r.endgame_moves, int(r.total_moves),
+        )
+        for r in df.itertuples(index=False)
+    ]
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM games WHERE username = %s", (username,))
+            if rows:
+                placeholders = ",".join(["%s"] * len(_GAMES_COLUMNS))
+                cur.executemany(
+                    f"INSERT INTO games ({','.join(_GAMES_COLUMNS)}) "
+                    f"VALUES ({placeholders})",
+                    rows,
+                )
+        conn.commit()
+        return len(rows)
+    finally:
+        conn.close()
+
+
+def get_games_df(username: str):
+    """
+    Reads this user's games back out of Postgres as a DataFrame with
+    the same columns parse_pgn.py produces from the CSV — so
+    get_aggregate_stats() can run identical pandas logic regardless of
+    which source it came from. Raises if Postgres has no rows for this
+    user (including "the table doesn't exist yet"), which is exactly
+    the signal retriever.py's fallback needs to drop to the CSV.
+    """
+    import pandas as pd
+
+    conn = get_db_connection()
+    try:
+        df = pd.read_sql(
+            "SELECT * FROM games WHERE username = %s ORDER BY id",
+            conn,
+            params=(username,),
+        )
+    finally:
+        conn.close()
+
+    if df.empty:
+        raise ValueError(f"No Postgres rows for '{username}' yet")
+    return df
